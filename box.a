@@ -1,0 +1,1038 @@
+
+	processor 6502
+        include "vcs.h"
+        include "macro.h"
+        include "xmacro.h"
+        ;include "mymacro.h"
+	
+	MAC PUT_PIXEL
+.X		SET {1}
+.Y		SET {2}
+        
+		ldx #.X
+        	stx X
+        	ldx #.Y
+        	stx Y
+                
+
+        	jsr SetPixel
+	ENDM
+	MAC UNPUT_PIXEL
+.X		SET {1}
+.Y		SET {2}
+        
+		ldx #.X
+        	stx X
+        	ldx #.Y
+        	stx Y
+                
+
+        	jsr UnsetPixel
+	ENDM
+        
+	MAC SET_PLAYER
+	        ldx PlayerX
+        	ldy PlayerY
+        	stx X
+        	sty Y
+        	jsr SetPixel
+	ENDM
+        
+	MAC UNSET_PLAYER
+	        ldx PlayerX
+        	ldy PlayerY
+        	stx X
+        	sty Y
+        	jsr UnsetPixel
+	ENDM
+        
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Variables segment
+
+        seg.u Variables
+	org $80
+	rorg $80
+
+Playfield			ds 55	; bitmap (4x11 bytes)
+Boxes				ds 55
+Temp				.byte
+Temp2				.byte
+PlayfieldHeightCounter		.byte
+PlayfieldPixelSizeCounter	.byte
+X				.byte
+Y				.byte
+PlayerX				.byte
+PlayerY				.byte
+NextPlayerX			.byte
+NextPlayerY			.byte
+NextNextPlayerX			.byte
+NextNextPlayerY			.byte
+WaitForDeadJoy			.byte
+DidCollideBox			.byte
+DidCollideWall			.byte
+FrameCounter			.byte
+RenderPass			.byte
+
+PlayfieldHeight			equ 11; number of tiles in y direction. 
+PlayfieldPixelSize		equ 8; size of one pixel
+PlayfieldBytesPerRow		equ 4
+ExtraWorkInScanLoop		equ 8	
+
+	seg.u read_ram_page_0
+	org $f000
+
+rTest				ds 1
+
+	seg.u write_ram_page_0
+	org $f400
+wTest				ds 1
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; Code segment
+
+	seg Code
+        org $f000
+	rorg $F000	
+        
+	jmp Start
+
+SetHorizPos subroutine
+	sta WSYNC	; start a new line
+        bit 0		; waste 3 cycles
+	sec		; set carry flag
+DivideLoop
+	sbc #15		; subtract 15
+	bcs DivideLoop	; branch until negative
+	eor #7		; calculate fine offset
+	asl
+	asl
+	asl
+	asl
+	sta RESP0,x	; fix coarse position
+	sta HMP0,x	; set fine offset
+	rts		; return to caller
+
+SetPixel subroutine
+		clc
+		ldx X
+                ldy IndexInPlayfieldPerPixelTable,x               
+		lda ShiftOneLeftTable,y
+		sta Temp
+		ldx X
+                lda PlayfieldNrPerPixelLookup,x
+                ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                ;xPlayfieldNr*height
+		tax 
+                lda XMul11,x
+                adc Y
+                tay
+		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+		ldx Temp
+                lda Playfield,y
+                ora Temp                
+		sta Playfield,y
+		rts
+
+UnsetPixel subroutine
+		clc
+        	ldx X
+        	ldy IndexInPlayfieldPerPixelTable,x
+                lda ShiftZeroLeftTable,y
+		sta Temp
+		ldx X
+                lda PlayfieldNrPerPixelLookup,x
+                ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                ;xPlayfieldNr*height
+		tax 
+                lda XMul11,x
+                adc Y
+                tay
+		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+		ldx Temp
+                lda Playfield,y
+                and Temp                
+		sta Playfield,y
+		rts
+
+SetBoxPixel subroutine
+		clc
+		ldx X
+                ldy IndexInPlayfieldPerPixelTable,x               
+		lda ShiftOneLeftTable,y
+		sta Temp
+		ldx X
+                lda PlayfieldNrPerPixelLookup,x
+                ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                ;xPlayfieldNr*height
+		tax 
+                lda XMul11,x
+                adc Y
+                tay
+		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+		ldx Temp
+                lda Boxes,y
+                ora Temp                
+		sta Boxes,y
+		rts
+
+UnsetBoxPixel subroutine
+		clc
+        	ldx X
+        	ldy IndexInPlayfieldPerPixelTable,x
+                lda ShiftZeroLeftTable,y
+		sta Temp
+		ldx X
+                lda PlayfieldNrPerPixelLookup,x
+                ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                ;xPlayfieldNr*height
+		tax 
+                lda XMul11,x
+                adc Y
+                tay
+		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+		ldx Temp
+                lda Boxes,y
+                and Temp                
+		sta Boxes,y
+		rts
+                
+IsBoxPixel subroutine
+		clc
+        	ldx X
+        	ldy IndexInPlayfieldPerPixelTable,x
+                lda ShiftOneLeftTable,y
+		sta Temp
+		ldx X
+                lda PlayfieldNrPerPixelLookup,x
+                ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                ;xPlayfieldNr*height
+		tax 
+                lda XMul11,x
+                adc Y
+                tay
+		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+		ldx Temp
+                lda Boxes,y
+                and Temp                
+		rts
+
+IsWallPixel subroutine
+		clc
+        	ldx X
+        	ldy IndexInPlayfieldPerPixelTable,x
+                lda ShiftOneLeftTable,y
+		sta Temp
+		ldx X
+                lda PlayfieldNrPerPixelLookup,x
+                ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                ;xPlayfieldNr*height
+		tax 
+                lda XMul11,x
+                adc Y
+                tay
+		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+		ldx Temp
+                lda PlayfieldArrayWalls,y
+                and Temp                
+		rts
+
+IsEndPixel subroutine
+		clc
+        	ldx X
+        	ldy IndexInPlayfieldPerPixelTable,x
+                lda ShiftOneLeftTable,y
+		sta Temp
+		ldx X
+                lda PlayfieldNrPerPixelLookup,x
+                ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                ;xPlayfieldNr*height
+		tax 
+                lda XMul11,x
+                adc Y
+                tay
+		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+		ldx Temp
+                lda PlayfieldArrayEnds,y
+                and Temp                
+		rts
+
+MoveJoystick subroutine
+	ldy WaitForDeadJoy
+        beq DoJoy
+        
+        ;when joystick isnt moved anymore
+        ;we set WaitForDeadJoy to false
+        lda #$FF
+        cmp SWCHA
+        bne SkipSetWaitJoy
+        
+        lda #0
+        sta WaitForDeadJoy
+SkipSetWaitJoy        
+        
+        
+        jmp SkipJoy
+DoJoy        
+; Move vertically
+; (up and down are actually reversed since ypos starts at bottom)
+	ldx PlayerY
+	ldy PlayerX
+        
+        
+        lda #%00100000	;Down?
+	bit SWCHA
+	bne SkipMoveDown
+        lda #1
+        sta WaitForDeadJoy
+        inx  
+	stx NextPlayerY
+	sty NextPlayerX
+	inx
+        stx NextNextPlayerY
+        sty NextNextPlayerX
+        
+SkipMoveDown
+        lda #%00010000	;Up?
+	bit SWCHA
+	bne SkipMoveUp
+        lda #1
+        sta WaitForDeadJoy
+        dex     
+	stx NextPlayerY
+	sty NextPlayerX
+	dex
+        stx NextNextPlayerY
+        sty NextNextPlayerX
+        
+SkipMoveUp       
+        lda #%01000000	;Left?
+	bit SWCHA
+	bne SkipMoveLeft
+        lda #1
+        sta WaitForDeadJoy
+        dey       
+	stx NextPlayerY
+	sty NextPlayerX
+	dey
+        stx NextNextPlayerY
+        sty NextNextPlayerX
+        
+SkipMoveLeft 
+	lda #%10000000	;Right?
+	bit SWCHA
+	bne SkipMoveRight
+        lda #1
+        sta WaitForDeadJoy
+        iny        
+       	stx NextPlayerY
+	sty NextPlayerX
+	iny
+        stx NextNextPlayerY
+        sty NextNextPlayerX
+        
+SkipMoveRight
+    
+SkipJoy        
+	rts
+
+
+DrawPlayField subroutine
+; 192 lines of frame
+        lda FrameCounter
+        cmp #0
+        beq .DoIt
+        rts
+.DoIt        
+	sta WSYNC
+	lda #22
+        sta COLUPF
+        
+.ScanLoop
+
+	ldx PlayfieldPixelSize
+.ThicknessLoop   
+	sta WSYNC	
+        
+        ldy PlayfieldHeightCounter
+	
+        lda Playfield+PlayfieldHeight*0,y         
+        sta PF0
+        lda Playfield+PlayfieldHeight*1,y         
+        sta PF1
+        lda Playfield+PlayfieldHeight*2,y         
+        sta PF2
+	
+        nop
+        nop
+         
+	lda Playfield+PlayfieldHeight*3,y         
+        sta PF0
+	
+        nop
+        nop
+        nop
+        lda #0
+        sta PF1
+        sta PF2
+
+	dex
+        bne .ThicknessLoop
+;end .ThicknessLoop        
+	sta WSYNC	
+        lda #0
+        sta PF0
+        sta PF1
+        sta PF2
+        inc PlayfieldHeightCounter
+        lda PlayfieldHeightCounter
+        cmp PlayfieldHeight
+        bne .ScanLoop
+	
+
+
+	TIMER_SETUP #192-#PlayfieldPixelSize*#PlayfieldHeight-1
+	lda #18
+        sta COLUPF
+        
+        TIMER_WAIT       
+	
+	rts	
+
+DrawBoxes subroutine
+; 192 lines of frame
+        ;sta WSYNC
+        lda FrameCounter
+        cmp #1
+        beq .ScanLoop
+        rts
+        
+.ScanLoop
+
+	ldx PlayfieldPixelSize
+        
+	ldy #%00000000
+        lda PlayfieldHeightCounter
+	cmp PlayerY
+	bne .EmptySprite
+        ldy #%11110000
+.EmptySprite
+        sty GRP0
+	        
+.ThicknessLoop        
+	sta WSYNC
+        
+        
+        
+        ldy PlayfieldHeightCounter
+	
+        lda Boxes+PlayfieldHeight*0,y         
+        sta PF0
+        lda Boxes+PlayfieldHeight*1,y         
+        sta PF1
+        lda Boxes+PlayfieldHeight*2,y         
+        sta PF2
+	
+        ;nop
+        nop
+        
+	lda Boxes+PlayfieldHeight*3,y         
+        sta PF0
+        
+        ;nop
+        
+        lda #0
+        sta PF1
+        sta PF2
+               
+        
+	dex
+        bne .ThicknessLoop
+;end .ThicknessLoop    
+	sta WSYNC	
+        lda #0
+        sta PF0
+        sta PF1
+        sta PF2
+
+        inc PlayfieldHeightCounter
+        lda PlayfieldHeightCounter
+        cmp PlayfieldHeight
+        bne .ScanLoop
+	
+
+
+	TIMER_SETUP #192-#PlayfieldPixelSize*#PlayfieldHeight
+        TIMER_WAIT       
+	
+	rts	
+
+DrawEnds subroutine
+; 192 lines of frame
+        sta WSYNC
+	lda #66
+        sta COLUPF
+        
+        lda FrameCounter
+        cmp #2
+        beq .ScanLoop
+        rts
+        
+.ScanLoop
+
+	ldx PlayfieldPixelSize
+        
+.EmptySprite
+	        
+.ThicknessLoop        
+	sta WSYNC
+                
+        ldy PlayfieldHeightCounter
+	
+        lda PlayfieldArrayEnds+PlayfieldHeight*0,y         
+        sta PF0
+        lda PlayfieldArrayEnds+PlayfieldHeight*1,y         
+        sta PF1
+        lda PlayfieldArrayEnds+PlayfieldHeight*2,y         
+        sta PF2
+	
+        ;nop
+       ; nop
+        
+	lda PlayfieldArrayEnds+PlayfieldHeight*3,y         
+        sta PF0
+        
+        ;nop
+        
+        lda #0
+        sta PF1        
+	dex
+        sta PF2
+        bne .ThicknessLoop
+;end .ThicknessLoop      
+	sta WSYNC	
+        lda #0
+        sta PF0
+        sta PF1
+        sta PF2
+
+        inc PlayfieldHeightCounter
+        lda PlayfieldHeightCounter
+        cmp PlayfieldHeight
+        bne .ScanLoop
+	
+
+
+	TIMER_SETUP #192-#PlayfieldPixelSize*#PlayfieldHeight
+        TIMER_WAIT       
+	
+	rts	
+
+DrawDone subroutine
+; 192 lines of frame
+        sta WSYNC
+	lda #66
+        sta COLUPF
+        
+        lda FrameCounter
+        cmp #4
+        beq .ScanLoop
+        rts
+        
+.ScanLoop
+
+	ldx PlayfieldPixelSize
+        
+.EmptySprite
+	        
+.ThicknessLoop        
+	sta WSYNC
+                
+        ldy PlayfieldHeightCounter
+	
+        lda PlayfieldArrayDone+PlayfieldHeight*0,y         
+        sta PF0
+        lda PlayfieldArrayDone+PlayfieldHeight*1,y         
+        sta PF1
+        lda PlayfieldArrayDone+PlayfieldHeight*2,y         
+        sta PF2
+	
+        nop
+        nop
+        nop
+        
+	lda PlayfieldArrayDone+PlayfieldHeight*3,y         
+        sta PF0
+        
+        ;nop
+        
+        lda #0
+        sta PF1        
+	dex
+        sta PF2
+        bne .ThicknessLoop
+;end .ThicknessLoop        
+        inc PlayfieldHeightCounter
+        lda PlayfieldHeightCounter
+        cmp PlayfieldHeight
+        bne .ScanLoop
+	
+
+
+	TIMER_SETUP #192-#PlayfieldPixelSize*#PlayfieldHeight
+        lda #0
+        sta PF0
+        sta PF1
+        sta PF2
+        sta GRP0
+        TIMER_WAIT       
+	
+	rts	
+
+
+
+Intro
+	
+
+	rts
+        
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;Program Start 
+
+Start
+
+	CLEAN_START
+        
+        
+        
+ClearMemory
+	STA 0,x
+	; Clear the first 1k of 3e RAM
+	sta $f400,x
+	sta $f500,x
+	sta $f600,x
+	sta $f700,x
+	DEX
+	BNE ClearMemory        
+        
+        ldy #0
+        sty RenderPass
+        lda #$44
+        sta wTest,y
+        
+        lda rTest,y
+        
+        
+        
+        ;copy walls to framebuffer
+        ldx #43
+CopyFrameBufferLoop        
+        lda PlayfieldArrayWalls,x
+        sta Playfield,x
+        dex
+        bne CopyFrameBufferLoop
+        
+;	LDA #$69  ; byte to store
+;	STA $1000 ; store it        
+;        nop
+;        nop
+;        LDA $1100 ; read it back
+     	
+        ldx #0
+        stx WaitForDeadJoy   
+        
+        ;init sokoban
+        ldx #13
+        ldy #8
+	stx PlayerX
+	sty PlayerY
+	stx NextPlayerX
+	sty NextPlayerY
+        
+        ;init boxes
+        ldx #6
+        ldy #2
+        stx X
+        sty Y
+        jsr SetPixel
+        jsr SetBoxPixel
+
+        ldx #8
+        ldy #3
+        stx X
+        sty Y
+        jsr SetPixel
+        jsr SetBoxPixel
+
+        ldx #6
+        ldy #4
+        stx X
+        sty Y
+        jsr SetPixel
+        jsr SetBoxPixel
+        
+        ldx #9
+        ldy #4
+        stx X
+        sty Y
+        jsr SetPixel
+        jsr SetBoxPixel
+
+        ldx #3
+        ldy #7
+        stx X
+        sty Y
+        jsr SetPixel
+        jsr SetBoxPixel
+
+        ldx #6
+        ldy #7
+        stx X
+        sty Y
+        jsr SetPixel
+        jsr SetBoxPixel
+
+        
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+	;PUT_PIXEL 0,1
+
+
+	lda #$1	; load the background color out of RAM
+	sta COLUBK	; set the background color
+
+	lda #5
+        sta COLUP0
+
+	lda #22
+        sta COLUPF
+
+NextFrame
+	VERTICAL_SYNC
+        
+        lda #0
+        sta VBLANK
+               
+
+	TIMER_SETUP 37        
+        
+	ldx #$00
+        stx PlayfieldHeightCounter
+        
+
+
+	SET_PLAYER
+
+	jsr MoveJoystick
+
+
+	ldx NextPlayerX
+        stx X
+        ldx NextPlayerY
+        stx Y
+
+
+	jsr IsBoxPixel
+	sta DidCollideBox     
+        
+
+
+        jsr IsWallPixel
+       	sta DidCollideWall
+	
+        lda #0
+	ldx PlayerX
+.MulLoop
+	adc #4
+        dex
+        bne .MulLoop
+
+        ldx #$0
+        ;lda #16
+        
+        
+        jsr SetHorizPos
+        sta WSYNC
+        sta HMOVE	
+        
+	;lda #4
+        ;sta FrameCounter
+        
+        
+        lda FrameCounter
+        cmp #3
+	bne NoResetFrameCounter
+        lda #0
+        sta FrameCounter
+NoResetFrameCounter        
+        
+	TIMER_WAIT
+	
+DoFrameAgain                
+        ;lda #2
+        ;sta FrameCounter
+
+        jsr DrawPlayField
+        jsr DrawBoxes
+        jsr DrawEnds
+	jsr DrawDone
+	
+        
+;        inc FrameCounter
+
+NoMoreDraw
+
+; 29 lines of overscan
+	TIMER_SETUP 29
+	
+
+        UNSET_PLAYER
+        lda DidCollideWall
+        bne CollidesWall
+	
+        lda DidCollideBox
+        bne CollidesBox
+        
+        ldy NextPlayerX
+        sty PlayerX
+        ldy NextPlayerY
+        sty PlayerY
+
+	jmp JmpOut
+CollidesBox
+	ldx NextNextPlayerX
+        stx X
+        ldx NextNextPlayerY
+        stx Y
+        jsr IsBoxPixel
+        bne CollidesNextBox	     
+
+        jsr IsWallPixel
+        bne CollidesNextBox	     
+
+
+        ldy NextPlayerX
+        sty PlayerX
+        ldy NextPlayerY
+        sty PlayerY
+        
+        ldx NextPlayerX
+        ldy NextPlayerY
+        
+        stx X
+        sty Y
+        jsr UnsetPixel
+        jsr UnsetBoxPixel
+        
+        
+        ldx NextNextPlayerX
+        ldy NextNextPlayerY
+        
+        stx X
+        sty Y
+        jsr SetPixel
+        jsr SetBoxPixel
+        jmp JmpOut
+
+CollidesWall
+	
+CollidesNextBox
+
+
+JmpOut
+
+	;Check if level is done
+        ldx #43
+IsLevelDoneLoop
+        lda Boxes,x
+        ldy PlayfieldArrayEnds,x
+        sty Temp
+        cmp Temp
+        bne NotDone
+        
+        dex
+        bne IsLevelDoneLoop
+       	
+        lda #$4
+        sta FrameCounter
+        jmp JmpFFS
+NotDone        
+        lda #$33
+        inc FrameCounter
+
+JmpFFS        
+	;inc FrameCounter
+        TIMER_WAIT
+        
+; total = 262 lines, go to next frame
+        jmp NextFrame
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+PlayfieldNrPerPixelLookup
+	.byte #$00, #$00, #$00, #$00
+        .byte #$01, #$01, #$01, #$01, #$01, #$01, #$01, #$01
+        .byte #$02, #$02, #$02, #$02, #$02, #$02, #$02, #$02
+	.byte #$03, #$03, #$03, #$03
+        .byte #$04, #$04, #$04, #$04, #$04, #$04, #$04, #$04
+        .byte #$05, #$05, #$05, #$05, #$05, #$05, #$05, #$05
+
+IndexInPlayfieldPerPixelTable
+	.byte #$04, #$05, #$06, #$07
+        .byte #$07, #$06, #$05, #$04, #$03, #$02, #$01, #$00 
+	.byte #$00, #$01, #$02, #$03, #$04, #$05, #$06, #$07
+	.byte #$04, #$05, #$06, #$07
+        .byte #$07, #$06, #$05, #$04, #$03, #$02, #$01, #$00 
+	.byte #$00, #$01, #$02, #$03, #$04, #$05, #$06, #$07
+        
+
+XMul11	.byte #$00, #$0B, #$16, #$21, #$2C, #$37, #$42, #$4D, #$58, #$63, #$6E
+
+ShiftOneLeftTable .byte #%00000001, #%00000010, #%00000100, #%00001000, #%00010000, #%00100000, #%01000000, #%10000000
+
+ShiftZeroLeftTable .byte #%11111110, #%11111101, #%11111011, #%11110111, #%11101111, #%11011111, #%10111111, #%01111111
+
+PlayfieldArrayWalls
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%10000000
+        .byte #%10000000
+        .byte #%11100000
+        .byte #%00100000
+        .byte #%00100000
+        .byte #%11100000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%01111100
+        .byte #%01000100
+        .byte #%01000100
+        .byte #%11000111
+        .byte #%00000001
+        .byte #%01011101
+        .byte #%01011101
+        .byte #%00000000
+        .byte #%11011110
+        .byte #%01000000
+        .byte #%01111111
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%11100000
+        .byte #%00111111
+        .byte #%00000000
+        .byte #%00111101
+        .byte #%11100111
+        .byte #%00000001
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%01110000
+        .byte #%01000000
+        .byte #%01000000
+        .byte #%01000000
+        .byte #%01110000
+        .byte #%00000000
+        
+PlayfieldArrayEnds
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00110000
+        .byte #%00110000
+        .byte #%00110000
+        .byte #%00000000
+        .byte #%00000000      
+        
+PlayfieldArrayDone
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%11100000
+        .byte #%00100000
+        .byte #%00100000
+        .byte #%00100000
+        .byte #%11100000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00111101
+        .byte #%10100101
+        .byte #%10100101
+        .byte #%10100101
+        .byte #%00111101
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%11110100
+        .byte #%00010101
+        .byte #%11110110
+        .byte #%00010110
+        .byte #%11110100
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%01000000
+        .byte #%01000000
+        .byte #%01000000
+        .byte #%00000000
+        .byte #%01000000
+        .byte #%00000000
+        .byte #%00000000
+        .byte #%00000000; Epilogue
+
+	org $fffc
+        .word Start	; reset vector
+        .word Start	; BRK vector
